@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# Bot control script for KXBTC15M Data Collector
+
+set -e
+
+BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BOT_BIN="$BOT_DIR/datacollector"
+PID_FILE="$BOT_DIR/.collector.pid"
+LOG_FILE="$BOT_DIR/collector.log"
+
+cd "$BOT_DIR"
+
+# Load .env if it exists
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+usage() {
+    cat <<EOF
+Usage: ./botctl <command> [options]
+
+Commands:
+    start        Build + start the data collector
+    stop         Graceful shutdown (SIGTERM)
+    restart      Stop + start
+    status       Show running status + stats
+    logs         Tail collector.log
+    build        Build the binary
+
+Options for start:
+    --debug      Enable debug logging
+    --output     Override output directory
+    --series     Override series ticker
+
+Examples:
+    ./botctl start                    # Start collector
+    ./botctl start --debug            # Start with debug logging
+    ./botctl status                   # Check status
+    ./botctl logs                     # Watch logs
+    ./botctl stop                     # Graceful shutdown
+
+EOF
+}
+
+is_running() {
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            return 0
+        else
+            rm -f "$PID_FILE"
+            return 1
+        fi
+    fi
+    return 1
+}
+
+build() {
+    echo "Building datacollector..."
+    go build -o "$BOT_BIN" ./cmd/datacollector
+    echo "Build complete: $BOT_BIN"
+}
+
+start() {
+    if is_running; then
+        echo "Collector is already running (PID $(cat $PID_FILE))"
+        exit 1
+    fi
+
+    # Build first
+    build
+
+    echo "Starting data collector..."
+
+    # Pass through all arguments
+    nohup "$BOT_BIN" "$@" >> "$LOG_FILE" 2>&1 &
+    pid=$!
+    echo $pid > "$PID_FILE"
+
+    sleep 1
+    if is_running; then
+        echo "Collector started (PID $pid)"
+        echo "Log: $LOG_FILE"
+        echo "Data: ./data/"
+    else
+        echo "Collector failed to start. Check logs: tail $LOG_FILE"
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+}
+
+stop() {
+    if ! is_running; then
+        echo "Collector is not running"
+        return 0
+    fi
+
+    pid=$(cat "$PID_FILE")
+    echo "Stopping collector (PID $pid)..."
+    kill -TERM "$pid" 2>/dev/null || true
+
+    # Wait up to 10 seconds for graceful shutdown
+    for i in {1..10}; do
+        if ! ps -p "$pid" > /dev/null 2>&1; then
+            rm -f "$PID_FILE"
+            echo "Collector stopped"
+            return 0
+        fi
+        sleep 1
+    done
+
+    # Force kill if still running
+    if ps -p "$pid" > /dev/null 2>&1; then
+        echo "Force killing collector..."
+        kill -9 "$pid" 2>/dev/null || true
+        rm -f "$PID_FILE"
+    fi
+    echo "Collector stopped"
+}
+
+status() {
+    echo "Data Collector Status:"
+    echo ""
+
+    if is_running; then
+        pid=$(cat "$PID_FILE")
+        uptime=$(ps -o etime= -p "$pid" | xargs)
+
+        # Count records from today's file
+        today=$(date -u +%Y-%m-%d)
+        datafile="$BOT_DIR/data/kxbtc15m-${today}.jsonl"
+        tick_count=0
+        market_count=0
+        if [ -f "$datafile" ]; then
+            tick_count=$(grep -c '"type":"tick"' "$datafile" 2>/dev/null || echo 0)
+            market_count=$(grep -c '"type":"market_open"' "$datafile" 2>/dev/null || echo 0)
+        fi
+
+        echo "  Status:    RUNNING"
+        echo "  PID:       $pid"
+        echo "  Uptime:    $uptime"
+        echo "  Ticks:     $tick_count (today)"
+        echo "  Markets:   $market_count (today)"
+        echo "  Data file: $datafile"
+    else
+        echo "  Status:    STOPPED"
+    fi
+
+    echo ""
+    # Show data files
+    if ls "$BOT_DIR"/data/kxbtc15m-*.jsonl 1>/dev/null 2>&1; then
+        echo "Data files:"
+        for f in "$BOT_DIR"/data/kxbtc15m-*.jsonl; do
+            lines=$(wc -l < "$f" | xargs)
+            size=$(du -h "$f" | cut -f1 | xargs)
+            echo "  $(basename $f)  ${lines} lines  ${size}"
+        done
+    fi
+}
+
+logs() {
+    if [ ! -f "$LOG_FILE" ]; then
+        echo "No log file found at $LOG_FILE"
+        exit 1
+    fi
+    tail -f "$LOG_FILE"
+}
+
+# Main command dispatcher
+case "${1:-}" in
+    start)
+        shift
+        start "$@"
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        shift
+        stop
+        sleep 1
+        start "$@"
+        ;;
+    status)
+        status
+        ;;
+    logs)
+        logs
+        ;;
+    build)
+        build
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

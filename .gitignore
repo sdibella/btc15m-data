@@ -1,0 +1,26 @@
+# Binaries
+datacollector
+bot
+
+# Data files
+data/
+*.jsonl
+
+# Logs
+*.log
+*.pid
+
+# Env
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+kalshi_private_key.pem
