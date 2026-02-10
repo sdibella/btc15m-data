@@ -72,6 +72,11 @@ func (f *BinanceFeed) connect(ctx context.Context, wsURL string) error {
 			continue
 		}
 
+		// Validate sanity — BTC price should be in reasonable range (> 100)
+		if bid < 100 || ask < 100 {
+			continue
+		}
+
 		mid := (bid + ask) / 2
 		f.setPrice(mid)
 	}
