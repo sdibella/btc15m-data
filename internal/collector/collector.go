@@ -31,6 +31,8 @@ type MarketSnap struct {
 	OpenInt   int     `json:"open_interest"`
 	Strike    float64 `json:"strike,omitempty"`
 	SecsLeft  int     `json:"secs_left"`
+	Status    string  `json:"status,omitempty"`
+	Result    string  `json:"result,omitempty"`
 }
 
 type Collector struct {
@@ -85,29 +87,45 @@ func (c *Collector) tick(ctx context.Context) {
 		}
 	}
 
-	// Fetch active Kalshi markets
+	// Fetch active Kalshi markets (both open and closed to capture settlements)
 	var snaps []MarketSnap
-	markets, err := c.client.GetMarkets(ctx, c.series, "open")
+
+	// Fetch both open and closed markets to capture settlements
+	openMarkets, err := c.client.GetMarkets(ctx, c.series, "open")
 	if err != nil {
-		slog.Debug("tick: market fetch failed", "err", err)
-	} else {
-		for _, m := range markets {
-			expiry, _ := m.ExpirationParsed()
-			secsLeft := int(time.Until(expiry).Seconds())
-			if secsLeft < 0 {
-				secsLeft = 0
-			}
-			snaps = append(snaps, MarketSnap{
-				Ticker:    m.Ticker,
-				YesBid:    m.YesBid,
-				YesAsk:    m.YesAsk,
-				LastPrice: m.LastPrice,
-				Volume:    m.Volume,
-				OpenInt:   m.OpenInterest,
-				Strike:    m.StrikePrice(),
-				SecsLeft:  secsLeft,
-			})
+		slog.Debug("tick: open market fetch failed", "err", err)
+	}
+
+	closedMarkets, err := c.client.GetMarkets(ctx, c.series, "closed")
+	if err != nil {
+		slog.Debug("tick: closed market fetch failed", "err", err)
+	}
+
+	// Combine both lists
+	var allMarkets []kalshi.Market
+	allMarkets = append(allMarkets, openMarkets...)
+	allMarkets = append(allMarkets, closedMarkets...)
+
+	// Build snapshots for all markets
+	for _, m := range allMarkets {
+		expiry, _ := m.ExpirationParsed()
+		secsLeft := int(time.Until(expiry).Seconds())
+		if secsLeft < 0 {
+			secsLeft = 0
 		}
+
+		snaps = append(snaps, MarketSnap{
+			Ticker:    m.Ticker,
+			YesBid:    m.YesBid,
+			YesAsk:    m.YesAsk,
+			LastPrice: m.LastPrice,
+			Volume:    m.Volume,
+			OpenInt:   m.OpenInterest,
+			Strike:    m.StrikePrice(),
+			SecsLeft:  secsLeft,
+			Status:    m.Status,
+			Result:    m.Result,
+		})
 	}
 
 	rec := TickRecord{
