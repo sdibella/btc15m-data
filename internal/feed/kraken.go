@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -63,6 +62,7 @@ func (f *KrakenFeed) connect(ctx context.Context, wsURL string) error {
 	if err := conn.WriteJSON(sub); err != nil {
 		return err
 	}
+	slog.Info("kraken subscribed")
 
 	for {
 		select {
@@ -77,6 +77,7 @@ func (f *KrakenFeed) connect(ctx context.Context, wsURL string) error {
 			return err
 		}
 
+		// Kraken v2 sends: {"channel":"ticker","type":"update","data":[{"symbol":"BTC/USD","bid":...,"ask":...}]}
 		var envelope struct {
 			Channel string            `json:"channel"`
 			Type    string            `json:"type"`
@@ -90,16 +91,16 @@ func (f *KrakenFeed) connect(ctx context.Context, wsURL string) error {
 		}
 
 		var ticker struct {
-			Bid json.Number `json:"bid"`
-			Ask json.Number `json:"ask"`
+			Bid float64 `json:"bid"`
+			Ask float64 `json:"ask"`
 		}
 		if err := json.Unmarshal(envelope.Data[0], &ticker); err != nil {
 			continue
 		}
 
-		bid, err1 := strconv.ParseFloat(string(ticker.Bid), 64)
-		ask, err2 := strconv.ParseFloat(string(ticker.Ask), 64)
-		if err1 != nil || err2 != nil {
+		bid := ticker.Bid
+		ask := ticker.Ask
+		if bid <= 0 || ask <= 0 {
 			continue
 		}
 

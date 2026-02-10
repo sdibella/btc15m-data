@@ -59,6 +59,7 @@ func (f *BitstampFeed) connect(ctx context.Context, wsURL string) error {
 	if err := conn.WriteJSON(sub); err != nil {
 		return err
 	}
+	slog.Info("bitstamp subscribed")
 
 	for {
 		select {
@@ -82,12 +83,14 @@ func (f *BitstampFeed) connect(ctx context.Context, wsURL string) error {
 			continue
 		}
 
-		if envelope.Event != "data" {
+		// Skip non-data messages (subscription confirmations, etc.)
+		if envelope.Event == "bts:subscription_succeeded" || envelope.Event == "bts:request_reconnect" {
+			slog.Debug("bitstamp event", "event", envelope.Event)
 			continue
 		}
 
 		var book struct {
-			Bids [][]string `json:"bids"`
+			Bids [][]string `json:"bids"` // [[price, amount], ...]
 			Asks [][]string `json:"asks"`
 		}
 		if err := json.Unmarshal(envelope.Data, &book); err != nil {
