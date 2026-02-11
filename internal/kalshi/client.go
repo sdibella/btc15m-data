@@ -133,6 +133,17 @@ func (c *Client) GetMarkets(ctx context.Context, seriesTicker string, status str
 	return result.Markets, nil
 }
 
+func (c *Client) GetMarket(ctx context.Context, ticker string) (*Market, error) {
+	var result struct {
+		Market Market `json:"market"`
+	}
+	path := fmt.Sprintf("/markets/%s", ticker)
+	if err := c.get(ctx, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result.Market, nil
+}
+
 func (c *Client) GetBalance(ctx context.Context) (*Balance, error) {
 	var result Balance
 	if err := c.get(ctx, "/portfolio/balance", nil, &result); err != nil {
