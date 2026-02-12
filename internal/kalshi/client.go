@@ -44,6 +44,8 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) PrivateKey() *rsa.PrivateKey { return c.privKey }
+
 func (c *Client) signPath(path string) string {
 	return c.basePathPrefix + path
 }

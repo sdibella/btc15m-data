@@ -92,6 +92,14 @@ func main() {
 	}
 	slog.Info("authenticated", "balance", fmt.Sprintf("$%.2f", float64(bal.Balance)/100.0))
 
+	// Init Kalshi WebSocket feed
+	kalshiWS := kalshi.NewKalshiFeed(cfg, client.PrivateKey())
+	go func() {
+		if err := kalshiWS.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("kalshi ws error", "err", err)
+		}
+	}()
+
 	// Init price feeds
 	coinbase := feed.NewCoinbaseFeed()
 	krakenFeed := feed.NewKrakenFeed()
@@ -113,6 +121,10 @@ func main() {
 	// Wait briefly for at least one feed to connect
 	slog.Info("waiting for price feeds...")
 	waitForFeeds(ctx, feeds)
+
+	// Wait briefly for Kalshi WS (non-blocking — REST fallback works without it)
+	slog.Info("waiting for kalshi ws...")
+	waitForWS(ctx, kalshiWS)
 
 	price := brti.Snapshot()
 	if price > 0 {
@@ -139,13 +151,34 @@ func main() {
 	defer writer.Close()
 
 	// Create and run collector
-	c := collector.New(client, brti, feeds, writer, cfg.SeriesTicker)
+	c := collector.New(client, kalshiWS, brti, feeds, writer, cfg.SeriesTicker)
 	if err := c.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("collector error", "err", err)
 		os.Exit(1)
 	}
 
 	slog.Info("collector stopped")
+}
+
+func waitForWS(ctx context.Context, ws *kalshi.KalshiFeed) {
+	deadline := time.After(5 * time.Second)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline:
+			slog.Warn("kalshi ws timed out, using REST fallback")
+			return
+		case <-tick.C:
+			if ws.IsConnected() {
+				slog.Info("kalshi ws ready")
+				return
+			}
+		}
+	}
 }
 
 func waitForFeeds(ctx context.Context, feeds []feed.ExchangeFeed) {

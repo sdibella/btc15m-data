@@ -22,37 +22,44 @@ type TickRecord struct {
 
 // MarketSnap is a point-in-time snapshot of a Kalshi market.
 type MarketSnap struct {
-	Ticker    string  `json:"ticker"`
-	YesBid    int     `json:"yes_bid"`
-	YesAsk    int     `json:"yes_ask"`
-	LastPrice int     `json:"last_price"`
-	Volume    int     `json:"volume"`
-	OpenInt   int     `json:"open_interest"`
-	Strike    float64 `json:"strike,omitempty"`
-	SecsLeft  int     `json:"secs_left"`
-	Status    string  `json:"status,omitempty"`
-	Result    string  `json:"result,omitempty"`
+	Ticker    string   `json:"ticker"`
+	YesBid    int      `json:"yes_bid"`
+	YesAsk    int      `json:"yes_ask"`
+	LastPrice int      `json:"last_price"`
+	Volume    int      `json:"volume"`
+	OpenInt   int      `json:"open_interest"`
+	Strike    float64  `json:"strike,omitempty"`
+	SecsLeft  int      `json:"secs_left"`
+	Status    string   `json:"status,omitempty"`
+	Result    string   `json:"result,omitempty"`
+	YesBook   [][2]int `json:"yes_book,omitempty"`
+	NoBook    [][2]int `json:"no_book,omitempty"`
 }
 
 type Collector struct {
-	client *kalshi.Client
-	brti   *feed.BRTIProxy
-	feeds  []feed.ExchangeFeed
-	writer *Writer
-	series string
+	client   *kalshi.Client
+	kalshiWS *kalshi.KalshiFeed
+	brti     *feed.BRTIProxy
+	feeds    []feed.ExchangeFeed
+	writer   *Writer
+	series   string
 }
 
-func New(client *kalshi.Client, brti *feed.BRTIProxy, feeds []feed.ExchangeFeed, writer *Writer, series string) *Collector {
+func New(client *kalshi.Client, kalshiWS *kalshi.KalshiFeed, brti *feed.BRTIProxy, feeds []feed.ExchangeFeed, writer *Writer, series string) *Collector {
 	return &Collector{
-		client: client,
-		brti:   brti,
-		feeds:  feeds,
-		writer: writer,
-		series: series,
+		client:   client,
+		kalshiWS: kalshiWS,
+		brti:     brti,
+		feeds:    feeds,
+		writer:   writer,
+		series:   series,
 	}
 }
 
 func (c *Collector) Run(ctx context.Context) error {
+	// Start market discovery loop (REST for metadata + subscription management)
+	go c.discoveryLoop(ctx)
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -63,6 +70,56 @@ func (c *Collector) Run(ctx context.Context) error {
 		case <-ticker.C:
 			c.tick(ctx)
 		}
+	}
+}
+
+// discoveryLoop fetches market metadata via REST and manages WS subscriptions.
+// Runs every 30s normally, every 5s near market rotation boundaries (:00/:15/:30/:45).
+func (c *Collector) discoveryLoop(ctx context.Context) {
+	c.discover(ctx)
+
+	for {
+		interval := c.discoveryInterval()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+			c.discover(ctx)
+		}
+	}
+}
+
+func (c *Collector) discoveryInterval() time.Duration {
+	min := time.Now().Minute() % 15
+	if min <= 1 || min >= 14 {
+		return 5 * time.Second // Near market rotation
+	}
+	return 30 * time.Second
+}
+
+func (c *Collector) discover(ctx context.Context) {
+	openMarkets, err := c.client.GetMarkets(ctx, c.series, "open")
+	if err != nil {
+		slog.Debug("discover: open market fetch failed", "err", err)
+	}
+
+	closedMarkets, err := c.client.GetMarkets(ctx, c.series, "closed")
+	if err != nil {
+		slog.Debug("discover: closed market fetch failed", "err", err)
+	}
+
+	var allMarkets []kalshi.Market
+	allMarkets = append(allMarkets, openMarkets...)
+	allMarkets = append(allMarkets, closedMarkets...)
+
+	if c.kalshiWS != nil && len(allMarkets) > 0 {
+		c.kalshiWS.UpdateMetadata(allMarkets)
+
+		tickers := make([]string, len(allMarkets))
+		for i, m := range allMarkets {
+			tickers[i] = m.Ticker
+		}
+		c.kalshiWS.UpdateSubscriptions(tickers)
 	}
 }
 
@@ -90,10 +147,46 @@ func (c *Collector) tick(ctx context.Context) {
 		}
 	}
 
-	// Fetch active Kalshi markets (both open and closed to capture settlements)
+	// Get Kalshi market data: WS when connected, REST fallback otherwise
 	var snaps []MarketSnap
+	if c.kalshiWS != nil && c.kalshiWS.IsConnected() {
+		for _, ms := range c.kalshiWS.Snapshot() {
+			snaps = append(snaps, MarketSnap{
+				Ticker:    ms.Ticker,
+				YesBid:    ms.YesBid,
+				YesAsk:    ms.YesAsk,
+				LastPrice: ms.LastPrice,
+				Volume:    ms.Volume,
+				OpenInt:   ms.OpenInterest,
+				Strike:    ms.Strike,
+				SecsLeft:  ms.SecsLeft,
+				Status:    ms.Status,
+				Result:    ms.Result,
+				YesBook:   ms.YesBook,
+				NoBook:    ms.NoBook,
+			})
+		}
+	} else {
+		snaps = c.restFallback(ctx)
+	}
 
-	// Fetch both open and closed markets to capture settlements
+	rec := TickRecord{
+		Type:     "tick",
+		Ts:       now.UTC().Format(time.RFC3339Nano),
+		BRTI:     brti,
+		Coinbase: coinbase,
+		Kraken:   kraken,
+		Bitstamp: bitstamp,
+		Markets:  snaps,
+	}
+
+	if err := c.writer.Write(rec); err != nil {
+		slog.Warn("tick: write failed", "err", err)
+	}
+}
+
+// restFallback fetches market data directly via REST (current behavior, no orderbook depth).
+func (c *Collector) restFallback(ctx context.Context) []MarketSnap {
 	openMarkets, err := c.client.GetMarkets(ctx, c.series, "open")
 	if err != nil {
 		slog.Debug("tick: open market fetch failed", "err", err)
@@ -104,12 +197,11 @@ func (c *Collector) tick(ctx context.Context) {
 		slog.Debug("tick: closed market fetch failed", "err", err)
 	}
 
-	// Combine both lists
 	var allMarkets []kalshi.Market
 	allMarkets = append(allMarkets, openMarkets...)
 	allMarkets = append(allMarkets, closedMarkets...)
 
-	// Build snapshots for all markets
+	var snaps []MarketSnap
 	for _, m := range allMarkets {
 		expiry, _ := m.ExpirationParsed()
 		secsLeft := int(time.Until(expiry).Seconds())
@@ -130,18 +222,5 @@ func (c *Collector) tick(ctx context.Context) {
 			Result:    m.Result,
 		})
 	}
-
-	rec := TickRecord{
-		Type:     "tick",
-		Ts:       now.UTC().Format(time.RFC3339Nano),
-		BRTI:     brti,
-		Coinbase: coinbase,
-		Kraken:   kraken,
-		Bitstamp: bitstamp,
-		Markets:  snaps,
-	}
-
-	if err := c.writer.Write(rec); err != nil {
-		slog.Warn("tick: write failed", "err", err)
-	}
+	return snaps
 }
