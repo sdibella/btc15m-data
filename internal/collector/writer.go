@@ -1,10 +1,14 @@
 package collector
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,8 +53,10 @@ func (w *Writer) ensureFile() error {
 		return nil
 	}
 
-	// Rotate: close old file, open new one
+	// Capture path before closing for background compression
+	var prevPath string
 	if w.file != nil {
+		prevPath = w.file.Name()
 		w.file.Close()
 	}
 
@@ -62,6 +68,11 @@ func (w *Writer) ensureFile() error {
 
 	w.file = f
 	w.fileDate = today
+
+	if prevPath != "" {
+		go compressFile(prevPath)
+	}
+
 	return nil
 }
 
@@ -72,4 +83,97 @@ func (w *Writer) Close() error {
 		return w.file.Close()
 	}
 	return nil
+}
+
+// compressFile gzips a JSONL file and removes the original.
+// Writes to .gz.tmp first, then renames atomically.
+func compressFile(srcPath string) {
+	dstPath := srcPath + ".gz"
+	tmpPath := dstPath + ".tmp"
+
+	// Skip if already compressed or source missing
+	if _, err := os.Stat(dstPath); err == nil {
+		slog.Debug("gzip already exists, skipping", "path", dstPath)
+		return
+	}
+	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+		return
+	}
+
+	slog.Info("compressing", "src", srcPath)
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		slog.Error("compress: open source", "err", err, "path", srcPath)
+		return
+	}
+	defer src.Close()
+
+	tmp, err := os.Create(tmpPath)
+	if err != nil {
+		slog.Error("compress: create tmp", "err", err, "path", tmpPath)
+		return
+	}
+
+	gz, _ := gzip.NewWriterLevel(tmp, gzip.BestCompression)
+	if _, err := io.Copy(gz, src); err != nil {
+		gz.Close()
+		tmp.Close()
+		os.Remove(tmpPath)
+		slog.Error("compress: copy", "err", err, "path", srcPath)
+		return
+	}
+	if err := gz.Close(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		slog.Error("compress: gzip close", "err", err, "path", srcPath)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		slog.Error("compress: tmp close", "err", err, "path", srcPath)
+		return
+	}
+
+	// Atomic rename
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		os.Remove(tmpPath)
+		slog.Error("compress: rename", "err", err, "path", srcPath)
+		return
+	}
+
+	// Remove original
+	if err := os.Remove(srcPath); err != nil {
+		slog.Warn("compress: remove original", "err", err, "path", srcPath)
+		return
+	}
+
+	slog.Info("compressed", "dst", dstPath)
+}
+
+// CompressStaleFiles compresses any JSONL files from previous days.
+// Call on startup to handle files left uncompressed after a crash.
+func CompressStaleFiles(dir, prefix string) {
+	today := time.Now().UTC().Format("2006-01-02")
+
+	// Clean up leftover .gz.tmp files
+	tmps, _ := filepath.Glob(filepath.Join(dir, prefix+"-*.jsonl.gz.tmp"))
+	for _, tmp := range tmps {
+		slog.Warn("removing stale tmp", "path", tmp)
+		os.Remove(tmp)
+	}
+
+	// Find JSONL files from previous days
+	pattern := filepath.Join(dir, prefix+"-*.jsonl")
+	files, _ := filepath.Glob(pattern)
+	for _, f := range files {
+		base := filepath.Base(f)
+		// Extract date from prefix-YYYY-MM-DD.jsonl
+		dateStr := strings.TrimPrefix(base, prefix+"-")
+		dateStr = strings.TrimSuffix(dateStr, ".jsonl")
+		if dateStr == today {
+			continue
+		}
+		go compressFile(f)
+	}
 }

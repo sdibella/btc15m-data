@@ -150,6 +150,9 @@ func main() {
 	}
 	defer writer.Close()
 
+	// Compress any stale JSONL files from previous days
+	collector.CompressStaleFiles(cfg.OutputDir, "kxbtc15m")
+
 	// Create and run collector
 	c := collector.New(client, kalshiWS, brti, feeds, writer, cfg.SeriesTicker)
 	if err := c.Run(ctx); err != nil && ctx.Err() == nil {

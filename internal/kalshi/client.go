@@ -113,6 +113,48 @@ type Balance struct {
 	Balance int `json:"balance"`
 }
 
+type Order struct {
+	OrderID       string `json:"order_id"`
+	Ticker        string `json:"ticker"`
+	Action        string `json:"action"` // "buy" or "sell"
+	Side          string `json:"side"`   // "yes" or "no"
+	Type          string `json:"type"`   // "limit" or "market"
+	YesPrice      int    `json:"yes_price"`
+	NoPrice       int    `json:"no_price"`
+	Quantity      int    `json:"quantity"`
+	FilledQuantity int   `json:"filled_quantity"`
+	RemainingQuantity int `json:"remaining_quantity"`
+	AvgFillPrice  int    `json:"avg_fill_price"`
+	Status        string `json:"status"` // "resting", "canceled", "executed", "pending"
+	CreatedTime   string `json:"created_time"`
+	UpdatedTime   string `json:"updated_time"`
+	ExpirationTime string `json:"expiration_time"`
+}
+
+type Fill struct {
+	TradeID     string `json:"trade_id"`
+	OrderID     string `json:"order_id"`
+	Ticker      string `json:"ticker"`
+	Side        string `json:"side"`
+	Action      string `json:"action"`
+	YesPrice    int    `json:"yes_price"`
+	NoPrice     int    `json:"no_price"`
+	Count       int    `json:"count"`
+	IsTaker     bool   `json:"is_taker"`
+	CreatedTime string `json:"created_time"`
+}
+
+type Settlement struct {
+	Ticker          string `json:"ticker"`
+	MarketResult    string `json:"market_result"` // "yes", "no", "all_no", "all_yes"
+	NoTotalCount    int    `json:"no_total_count"`
+	NoCost          int    `json:"no_cost"`
+	YesTotalCount   int    `json:"yes_total_count"`
+	YesCost         int    `json:"yes_cost"`
+	Revenue         int    `json:"revenue"`
+	SettledTime     string `json:"settled_time"`
+}
+
 // --- API Methods ---
 
 func (c *Client) GetMarkets(ctx context.Context, seriesTicker string, status string) ([]Market, error) {
@@ -152,6 +194,84 @@ func (c *Client) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, err
 	}
 	return &result, nil
+}
+
+// OrderParams specifies filters for GetOrders.
+type OrderParams struct {
+	Ticker string
+	Status string
+	Cursor string
+}
+
+func (c *Client) GetOrders(ctx context.Context, p OrderParams) ([]Order, string, error) {
+	params := url.Values{}
+	params.Set("limit", "200")
+	if p.Ticker != "" {
+		params.Set("ticker", p.Ticker)
+	}
+	if p.Status != "" {
+		params.Set("status", p.Status)
+	}
+	if p.Cursor != "" {
+		params.Set("cursor", p.Cursor)
+	}
+
+	var result struct {
+		Orders []Order `json:"orders"`
+		Cursor string  `json:"cursor"`
+	}
+	if err := c.get(ctx, "/portfolio/orders", params, &result); err != nil {
+		return nil, "", err
+	}
+	return result.Orders, result.Cursor, nil
+}
+
+// FillParams specifies filters for GetFills.
+type FillParams struct {
+	Ticker string
+	Cursor string
+}
+
+func (c *Client) GetFills(ctx context.Context, p FillParams) ([]Fill, string, error) {
+	params := url.Values{}
+	params.Set("limit", "200")
+	if p.Ticker != "" {
+		params.Set("ticker", p.Ticker)
+	}
+	if p.Cursor != "" {
+		params.Set("cursor", p.Cursor)
+	}
+
+	var result struct {
+		Fills  []Fill `json:"fills"`
+		Cursor string `json:"cursor"`
+	}
+	if err := c.get(ctx, "/portfolio/fills", params, &result); err != nil {
+		return nil, "", err
+	}
+	return result.Fills, result.Cursor, nil
+}
+
+// SettlementParams specifies filters for GetSettlements.
+type SettlementParams struct {
+	Cursor string
+}
+
+func (c *Client) GetSettlements(ctx context.Context, p SettlementParams) ([]Settlement, string, error) {
+	params := url.Values{}
+	params.Set("limit", "200")
+	if p.Cursor != "" {
+		params.Set("cursor", p.Cursor)
+	}
+
+	var result struct {
+		Settlements []Settlement `json:"settlements"`
+		Cursor      string       `json:"cursor"`
+	}
+	if err := c.get(ctx, "/portfolio/settlements", params, &result); err != nil {
+		return nil, "", err
+	}
+	return result.Settlements, result.Cursor, nil
 }
 
 // --- HTTP helpers ---

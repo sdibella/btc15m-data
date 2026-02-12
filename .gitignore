@@ -1,10 +1,23 @@
 # Binaries
-datacollector
-bot
+/datacollector
+/tradelog
+/tradelog-linux
+/bot
+/retrofit
+/retrofit-linux
 
 # Data files
 data/
 *.jsonl
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.pyc
 
 # Logs
 *.log
