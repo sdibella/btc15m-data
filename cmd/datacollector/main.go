@@ -69,21 +69,35 @@ func main() {
 		cancel()
 	}()
 
-	// Verify auth with a balance check
-	bal, err := client.GetBalance(ctx)
-	if err != nil {
-		slog.Error("auth check failed — cannot reach Kalshi API", "err", err)
-		os.Exit(1)
+	// Verify auth with a balance check (retry with backoff for maintenance windows)
+	const maxAuthAttempts = 5
+	var bal *kalshi.Balance
+	for attempt := 1; attempt <= maxAuthAttempts; attempt++ {
+		bal, err = client.GetBalance(ctx)
+		if err == nil {
+			break
+		}
+		if attempt == maxAuthAttempts {
+			slog.Error("auth check failed after retries — giving up", "err", err, "attempts", attempt)
+			os.Exit(1)
+		}
+		backoff := time.Duration(attempt*attempt) * 15 * time.Second // 15s, 60s, 135s, 240s
+		slog.Warn("auth check failed, retrying", "err", err, "attempt", attempt, "backoff", backoff)
+		select {
+		case <-ctx.Done():
+			slog.Error("shutdown during auth retry")
+			os.Exit(1)
+		case <-time.After(backoff):
+		}
 	}
 	slog.Info("authenticated", "balance", fmt.Sprintf("$%.2f", float64(bal.Balance)/100.0))
 
 	// Init price feeds
-	binance := feed.NewBinanceFeed()
 	coinbase := feed.NewCoinbaseFeed()
 	krakenFeed := feed.NewKrakenFeed()
 	bitstamp := feed.NewBitstampFeed()
 
-	feeds := []feed.ExchangeFeed{binance, coinbase, krakenFeed, bitstamp}
+	feeds := []feed.ExchangeFeed{coinbase, krakenFeed, bitstamp}
 	brti := feed.NewBRTIProxy(feeds)
 
 	// Start feed goroutines

@@ -17,7 +17,6 @@ type TickRecord struct {
 	Coinbase float64      `json:"coinbase"`
 	Kraken   float64      `json:"kraken"`
 	Bitstamp float64      `json:"bitstamp"`
-	Binance  float64      `json:"binance"`
 	Markets  []MarketSnap `json:"markets,omitempty"`
 }
 
@@ -68,12 +67,18 @@ func (c *Collector) Run(ctx context.Context) error {
 }
 
 func (c *Collector) tick(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("tick panic recovered", "panic", r)
+		}
+	}()
+
 	now := time.Now()
 	brti := c.brti.Snapshot()
 	c.brti.RecordSample()
 
 	// Snapshot individual feeds
-	var coinbase, kraken, bitstamp, binance float64
+	var coinbase, kraken, bitstamp float64
 	for _, f := range c.feeds {
 		switch f.Name() {
 		case "coinbase":
@@ -82,8 +87,6 @@ func (c *Collector) tick(ctx context.Context) {
 			kraken = f.MidPrice()
 		case "bitstamp":
 			bitstamp = f.MidPrice()
-		case "binance":
-			binance = f.MidPrice()
 		}
 	}
 
@@ -135,7 +138,6 @@ func (c *Collector) tick(ctx context.Context) {
 		Coinbase: coinbase,
 		Kraken:   kraken,
 		Bitstamp: bitstamp,
-		Binance:  binance,
 		Markets:  snaps,
 	}
 

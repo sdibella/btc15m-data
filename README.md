@@ -3,8 +3,8 @@
 Per-second price data collector for backtesting Kalshi 15-minute Bitcoin markets.
 
 Records:
-- **BRTI** (median of Binance, Coinbase, Kraken, Bitstamp)
-- **Individual exchange prices** from 4 WebSocket feeds
+- **BRTI** (median of Coinbase, Kraken, Bitstamp)
+- **Individual exchange prices** from 3 WebSocket feeds
 - **Kalshi market snapshots** (bid/ask/last/volume/strike/time remaining)
 
 ## Quick Start
@@ -39,7 +39,6 @@ Each line:
   "coinbase": 70241.155,
   "kraken": 70244.25,
   "bitstamp": 70241.5,
-  "binance": 70241.1,
   "markets": [
     {
       "ticker": "KXBTC15M-26FEB091900-00",
@@ -71,9 +70,27 @@ SERIES_TICKER=KXBTC15M
 - `cmd/datacollector/` — Entry point (flags, graceful shutdown)
 - `internal/config/` — Config loading from .env
 - `internal/kalshi/` — Kalshi API client (auth + GetMarkets)
-- `internal/feed/` — 4 exchange WebSocket feeds (Binance, Coinbase, Kraken, Bitstamp)
+- `internal/feed/` — 3 exchange WebSocket feeds (Coinbase, Kraken, Bitstamp)
 - `internal/collector/` — Per-second tick writer + JSONL daily rotation
-- `botctl` — Process management (start/stop/status/logs)
+- `botctl` — Process management (delegates to systemd)
+- `datacollector.service` — systemd user service (auto-restart, survives reboots)
+- `healthcheck.sh` — Cron watchdog (checks service + data freshness)
+
+## Deployment (systemd)
+
+```bash
+# One-time setup on VPS
+mkdir -p ~/.config/systemd/user
+cp datacollector.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable datacollector
+loginctl enable-linger $USER
+
+# Install cron watchdog
+crontab -e  # Add: */5 * * * * /home/stefan/KalshiBTC15min-data/healthcheck.sh
+```
+
+Then use `./botctl start|stop|restart|status|logs` as before.
 
 ## Development
 

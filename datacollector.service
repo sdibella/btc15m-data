@@ -1,0 +1,22 @@
+[Unit]
+Description=KXBTC15M Data Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/stefan/KalshiBTC15min-data
+ExecStart=/home/stefan/KalshiBTC15min-data/datacollector
+EnvironmentFile=/home/stefan/KalshiBTC15min-data/.env
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Logging goes to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=datacollector
+
+[Install]
+WantedBy=default.target
