@@ -11,7 +11,7 @@ EnvironmentFile=/home/stefan/KalshiBTC15min-data/.env
 Restart=on-failure
 RestartSec=10
 StartLimitBurst=5
-StartLimitIntervalSec=300
+StartLimitInterval=300
 
 # Logging goes to journald
 StandardOutput=journal
