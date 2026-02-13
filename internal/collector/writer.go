@@ -91,9 +91,12 @@ func compressFile(srcPath string) {
 	dstPath := srcPath + ".gz"
 	tmpPath := dstPath + ".tmp"
 
-	// Skip if already compressed or source missing
+	// If .gz already exists, just clean up the original
 	if _, err := os.Stat(dstPath); err == nil {
-		slog.Debug("gzip already exists, skipping", "path", dstPath)
+		if _, err := os.Stat(srcPath); err == nil {
+			slog.Info("gzip exists, removing original", "path", srcPath)
+			os.Remove(srcPath)
+		}
 		return
 	}
 	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
