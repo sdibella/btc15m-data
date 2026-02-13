@@ -1,0 +1,11 @@
+[Unit]
+Description=Data Collector Watchdog
+After=datacollector.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/stefan/KalshiBTC15min-data
+ExecStart=/home/stefan/KalshiBTC15min-data/scripts/watchdog.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dc-watchdog
