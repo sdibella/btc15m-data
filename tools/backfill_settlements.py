@@ -154,6 +154,13 @@ def patch_file(path, compressed, patches):
             f.write(line + "\n")
 
     os.rename(tmp_path, path)
+
+    # If we patched a .gz file, remove any stale uncompressed original
+    if compressed:
+        plain = str(path).removesuffix(".gz")
+        if os.path.exists(plain):
+            os.remove(plain)
+
     return patched
 
 
