@@ -3,6 +3,8 @@ package collector
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gw/btc15m-data/internal/feed"
@@ -43,6 +45,10 @@ type Collector struct {
 	feeds    []feed.ExchangeFeed
 	writer   *Writer
 	series   string
+
+	lastWriteMu   sync.Mutex
+	lastWriteTime time.Time
+	tickCount     int64
 }
 
 func New(client *kalshi.Client, kalshiWS *kalshi.KalshiFeed, brti *feed.BRTIProxy, feeds []feed.ExchangeFeed, writer *Writer, series string) *Collector {
@@ -57,6 +63,12 @@ func New(client *kalshi.Client, kalshiWS *kalshi.KalshiFeed, brti *feed.BRTIProx
 }
 
 func (c *Collector) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Start watchdog
+	go c.watchdog(ctx, cancel)
+
 	// Start market discovery loop (REST for metadata + subscription management)
 	go c.discoveryLoop(ctx)
 
@@ -182,6 +194,64 @@ func (c *Collector) tick(ctx context.Context) {
 
 	if err := c.writer.Write(rec); err != nil {
 		slog.Warn("tick: write failed", "err", err)
+	} else {
+		c.lastWriteMu.Lock()
+		c.lastWriteTime = time.Now()
+		c.tickCount++
+		c.lastWriteMu.Unlock()
+	}
+}
+
+// watchdog monitors data flow and cancels context if writes stall.
+// Also emits a periodic heartbeat log every 60s.
+func (c *Collector) watchdog(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	heartbeatTicker := time.NewTicker(60 * time.Second)
+	defer heartbeatTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-heartbeatTicker.C:
+			c.lastWriteMu.Lock()
+			count := c.tickCount
+			lastWrite := c.lastWriteTime
+			c.lastWriteMu.Unlock()
+
+			var feedStatus []string
+			for _, f := range c.feeds {
+				status := "ok"
+				if f.IsStale() {
+					status = "stale"
+				}
+				feedStatus = append(feedStatus, f.Name()+":"+status)
+			}
+
+			slog.Info("heartbeat",
+				"ticks", count,
+				"last_write_ago", time.Since(lastWrite).Round(time.Second).String(),
+				"feeds", strings.Join(feedStatus, " "),
+				"kalshi_ws", c.kalshiWS.IsConnected(),
+			)
+		case <-ticker.C:
+			c.lastWriteMu.Lock()
+			lastWrite := c.lastWriteTime
+			c.lastWriteMu.Unlock()
+
+			if lastWrite.IsZero() {
+				continue // hasn't started writing yet
+			}
+			if time.Since(lastWrite) > 90*time.Second {
+				slog.Error("watchdog: no successful write for 90s, triggering restart",
+					"last_write", lastWrite.Format(time.RFC3339),
+				)
+				cancel()
+				return
+			}
+		}
 	}
 }
 
