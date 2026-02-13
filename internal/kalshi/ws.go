@@ -419,9 +419,11 @@ func (f *KalshiFeed) subscribeLocked(tickers []string) error {
 			MarketTickers: tickers,
 		},
 	}
+	f.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := f.conn.WriteJSON(cmd); err != nil {
 		return err
 	}
+	f.conn.SetWriteDeadline(time.Time{})
 	for _, t := range tickers {
 		f.subscribedTickers[t] = true
 	}
@@ -478,6 +480,7 @@ func (f *KalshiFeed) UpdateSubscriptions(tickers []string) {
 					MarketTickers: toAdd,
 				},
 			}
+			f.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := f.conn.WriteJSON(cmd); err != nil {
 				slog.Warn("ws subscribe failed", "err", err)
 			}
@@ -493,6 +496,7 @@ func (f *KalshiFeed) UpdateSubscriptions(tickers []string) {
 					Action:        "add_markets",
 				},
 			}
+			f.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := f.conn.WriteJSON(cmd); err != nil {
 				slog.Warn("ws update_subscription add failed", "err", err)
 			}
@@ -515,6 +519,7 @@ func (f *KalshiFeed) UpdateSubscriptions(tickers []string) {
 				Action:        "remove_markets",
 			},
 		}
+		f.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := f.conn.WriteJSON(cmd); err != nil {
 			slog.Warn("ws update_subscription remove failed", "err", err)
 		}
@@ -524,6 +529,7 @@ func (f *KalshiFeed) UpdateSubscriptions(tickers []string) {
 		slog.Debug("ws removed markets", "count", len(toRemove))
 	}
 
+	f.conn.SetWriteDeadline(time.Time{})
 	f.writeMu.Unlock()
 
 	// Clean up caches for removed tickers
