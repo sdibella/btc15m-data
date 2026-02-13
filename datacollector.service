@@ -8,8 +8,8 @@ Type=simple
 WorkingDirectory=/home/stefan/KalshiBTC15min-data
 ExecStart=/home/stefan/KalshiBTC15min-data/datacollector
 EnvironmentFile=/home/stefan/KalshiBTC15min-data/.env
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=5
 StartLimitBurst=5
 StartLimitInterval=300
 
