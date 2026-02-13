@@ -46,7 +46,8 @@ func (f *KrakenFeed) Run(ctx context.Context) error {
 }
 
 func (f *KrakenFeed) connect(ctx context.Context, wsURL string) error {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return err
 	}
